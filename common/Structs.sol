@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-// TODO: move to a separate file
 /** Request Structs */
 struct DepositWithPermit {
     address user;
     uint64 amount;
     uint64 deadline;
+    address token;
     Signature signature;
 }
 
 struct RequestWithdrawal {
     address user;
     uint64 amount;
+    address token;
     uint64 nonce;
     Signature[] signatures;
 }
@@ -23,6 +24,7 @@ struct ValidatorUpdateRequest {
     address[] coldValidatorSet;
     uint64[] powers;
 }
+
 /** End Request Structs */
 
 struct Agent {
@@ -52,6 +54,7 @@ struct PendingValidatorSetUpdate {
 struct WithdrawalData {
     address user;
     uint64 amount;
+    address token;
     uint64 nonce;
     uint64 requestedTime;
     uint64 requestedBlockNumber;

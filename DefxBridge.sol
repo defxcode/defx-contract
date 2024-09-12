@@ -26,7 +26,9 @@ contract DefxBridge is
 {
     using SafeERC20 for ERC20PermitUpgradeable;
 
-    ERC20PermitUpgradeable private transactionToken;
+    ERC20PermitUpgradeable[] public enabledTokens;
+    mapping(address => bool) public enabledTokensMap;
+
     bytes32 public domainSeparator;
     uint64 public withdrawalDisputePeriodSeconds;
     uint64 public validatorSetDisputePeriodSeconds;
@@ -54,7 +56,7 @@ contract DefxBridge is
 
     function initialize(
         address _initialOwner,
-        address _erc20Contract,
+        address[] calldata tokenContractsUpdate,
         uint64 _withdrawalDisputePeriodSeconds,
         uint64 _validatorSetDisputePeriodSeconds,
         uint64 _blockDurationMillis,
@@ -64,8 +66,8 @@ contract DefxBridge is
         __Ownable_init(_initialOwner);
         __UUPSUpgradeable_init();
         __Pausable_init();
-        // initialize the ERC20 token used to deposit/withdraw
-        transactionToken = ERC20PermitUpgradeable(_erc20Contract);
+        // initialize the ERC20 tokens used to deposit/withdraw
+        _updateTokenContracts(tokenContractsUpdate);
 
         domainSeparator = SignatureLibrary.makeDomainSeparator();
 
@@ -130,6 +132,40 @@ contract DefxBridge is
             coldValidatorSet: coldValidatorSet,
             powers: powers
         });
+    }
+
+    function _updateTokenContracts(
+        address[] memory contractAddresses
+    ) internal {
+        uint256 noOfNewTokens = contractAddresses.length;
+        if (noOfNewTokens == 0) {
+            revert NotEnoughTokensToUpdate();
+        }
+
+        ERC20PermitUpgradeable[]
+            memory contracts = new ERC20PermitUpgradeable[](noOfNewTokens);
+
+        for (uint i = 0; i < noOfNewTokens; i++) {
+            if (contractAddresses[i] == address(0)) {
+                revert InvalidTokenContract();
+            }
+            contracts[i] = ERC20PermitUpgradeable(contractAddresses[i]);
+        }
+
+        // disable the old tokens
+        uint256 noOfOldEnabledTokens = enabledTokens.length;
+        for (uint i = 0; i < noOfOldEnabledTokens; i++) {
+            enabledTokensMap[address(enabledTokens[i])] = false;
+        }
+
+        // enable the new tokens
+        for (uint i = 0; i < noOfNewTokens; i++) {
+            enabledTokensMap[address(contracts[i])] = true;
+        }
+
+        enabledTokens = contracts;
+
+        emit ChangedTokenContract(contractAddresses);
     }
 
     function _verifyAndIncrementNonce(
@@ -205,6 +241,34 @@ contract DefxBridge is
     /** End Pausing **/
 
     /** Config mutations **/
+    function updateTokenContracts(
+        address[] calldata tokenContractsUpdate,
+        uint64 nonce,
+        Signature[] calldata signatures
+    ) external {
+        // validate the nonce
+        _verifyAndIncrementNonce("updateTokenContracts", nonce);
+
+        // generate the message hash used to sign the request
+        bytes32 messageHash = SignatureLibrary.generateUniqueMessageHash(
+            keccak256(
+                abi.encode("updateTokenContracts", tokenContractsUpdate, nonce)
+            ),
+            address(this)
+        );
+        // verify the validator quorum
+        ValidatorLibrary.verifyValidatorQuorom(
+            messageHash,
+            signatures,
+            cumulativeValidatorPower,
+            domainSeparator,
+            validatorsColdWallets
+        );
+
+        // update the token contracts
+        _updateTokenContracts(tokenContractsUpdate);
+    }
+
     function modifyLocker(
         address locker,
         bool isEnabled,
@@ -380,15 +444,17 @@ contract DefxBridge is
         DepositWithPermit[] calldata deposits
     ) external whenNotPaused nonReentrant {
         // validate the deposit request
-        if (deposits.length == 0) {
+        uint256 noOfDeposits = deposits.length;
+
+        if (noOfDeposits == 0) {
             revert DepositsEmpty();
         }
 
-        if (deposits.length > 10) {
+        if (noOfDeposits > 10) {
             revert MoreThanTenDeposits();
         }
 
-        for (uint256 i = 0; i < deposits.length; i++) {
+        for (uint256 i = 0; i < noOfDeposits; i++) {
             if (deposits[i].user == address(0)) {
                 revert ZeroUserAddress();
             }
@@ -401,10 +467,19 @@ contract DefxBridge is
                 revert PermitDeadlineExpired();
             }
 
+            if (
+                deposits[i].token == address(0) ||
+                !enabledTokensMap[deposits[i].token]
+            ) {
+                revert InvalidTokenContract();
+            }
+
             // deposit the tokens
+            ERC20PermitUpgradeable transactionToken = ERC20PermitUpgradeable(
+                deposits[i].token
+            );
             address spender = address(this);
 
-            // TODO: do we need to catch exception here?
             transactionToken.permit(
                 deposits[i].user,
                 spender,
@@ -456,6 +531,13 @@ contract DefxBridge is
                 revert WithdrawalAmountShouldBeGreaterThanZero();
             }
 
+            if (
+                withdrawals[i].token == address(0) ||
+                !enabledTokensMap[withdrawals[i].token]
+            ) {
+                revert InvalidTokenContract();
+            }
+
             // generate the message hash used to sign the request
             bytes32 messageHash = SignatureLibrary.generateUniqueMessageHash(
                 keccak256(
@@ -463,6 +545,7 @@ contract DefxBridge is
                         "batchRequestWithdrawals",
                         withdrawals[i].user,
                         withdrawals[i].amount,
+                        withdrawals[i].token,
                         withdrawals[i].nonce
                     )
                 ),
@@ -495,6 +578,7 @@ contract DefxBridge is
             uint64 requestedBlockNumber = Utils.getCurrentBlockNumber();
             WithdrawalData memory withdrawalData = WithdrawalData({
                 user: withdrawals[i].user,
+                token: withdrawals[i].token,
                 amount: withdrawals[i].amount,
                 nonce: withdrawals[i].nonce,
                 requestedTime: requestedTime,
@@ -567,6 +651,10 @@ contract DefxBridge is
         }
 
         // Finalize the withdrawals
+        ERC20PermitUpgradeable transactionToken = ERC20PermitUpgradeable(
+            requestedWithdrawals[message].token
+        );
+
         transactionToken.safeTransfer(
             requestedWithdrawals[message].user,
             requestedWithdrawals[message].amount

@@ -57,3 +57,5 @@ event ContractPaused();
 event ContractResumed();
 
 event ModifiedLocker(address locker, bool isEnabled);
+
+event ChangedTokenContract(address[] newTokenContracts);

@@ -36,3 +36,6 @@ error ContractAlreadyPaused();
 error ContractNotPaused();
 
 error InvalidNonce();
+
+error NotEnoughTokensToUpdate();
+error InvalidTokenContract();
