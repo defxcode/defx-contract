@@ -99,34 +99,34 @@ contract DefxBridge is
         validatorsColdWallets = ValidatorSet(coldValidatorSet, powers);
 
         uint64 cumulativePower;
-        for (uint64 i = 0; i < powers.length; i++) {
+        for (uint256 i = 0; i < powers.length; i++) {
             cumulativePower += powers[i];
         }
         cumulativeValidatorPower = cumulativePower;
 
-        // add new validators to lockers
-        for (uint64 i = 0; i < validatorsColdWallets.validators.length; i++) {
-            lockers[validatorsColdWallets.validators[i]] = true;
-        }
-
         // remove old validators from lockers
         for (
-            uint64 i = 0;
+            uint256 i = 0;
             i < oldValidatorsColdWallets.validators.length;
             i++
         ) {
             lockers[oldValidatorsColdWallets.validators[i]] = false;
         }
 
+        // add new validators to lockers
+        for (uint256 i = 0; i < validatorsColdWallets.validators.length; i++) {
+            lockers[validatorsColdWallets.validators[i]] = true;
+        }
+
         emit FinalizedValidatorSetUpdate(
-            pendingValidatorSetUpdate.epochTimestamp,
+            pendingValidatorSetUpdate.epochTimestampInSeconds,
             pendingValidatorSetUpdate.hotValidatorSet,
             pendingValidatorSetUpdate.coldValidatorSet,
             pendingValidatorSetUpdate.powers
         );
         pendingValidatorSetUpdate = PendingValidatorSetUpdate({
-            epochTimestamp: 0,
-            updateTime: 0,
+            epochTimestampInSeconds: 0,
+            updateEpochTimestampInSeconds: 0,
             updateBlockNumber: Utils.getCurrentBlockNumber(),
             hotValidatorSet: hotValidatorSet,
             coldValidatorSet: coldValidatorSet,
@@ -145,7 +145,7 @@ contract DefxBridge is
         ERC20PermitUpgradeable[]
             memory contracts = new ERC20PermitUpgradeable[](noOfNewTokens);
 
-        for (uint i = 0; i < noOfNewTokens; i++) {
+        for (uint256 i = 0; i < noOfNewTokens; i++) {
             if (contractAddresses[i] == address(0)) {
                 revert InvalidTokenContract();
             }
@@ -154,12 +154,12 @@ contract DefxBridge is
 
         // disable the old tokens
         uint256 noOfOldEnabledTokens = enabledTokens.length;
-        for (uint i = 0; i < noOfOldEnabledTokens; i++) {
+        for (uint256 i = 0; i < noOfOldEnabledTokens; i++) {
             enabledTokensMap[address(enabledTokens[i])] = false;
         }
 
         // enable the new tokens
-        for (uint i = 0; i < noOfNewTokens; i++) {
+        for (uint256 i = 0; i < noOfNewTokens; i++) {
             enabledTokensMap[address(contracts[i])] = true;
         }
 
@@ -179,14 +179,14 @@ contract DefxBridge is
     }
 
     /** Pausing **/
-    function pause() external {
+    function pause() external whenNotPaused {
         // validate the sender is a locker
         if (!lockers[msg.sender]) {
             revert NotALocker();
         }
 
         // check if the locker has already voted to pause
-        for (uint64 i = 0; i < lockersVotingLock.length; i++) {
+        for (uint256 i = 0; i < lockersVotingLock.length; i++) {
             if (lockersVotingLock[i] == msg.sender) {
                 revert AlreadyVoted();
             }
@@ -196,7 +196,7 @@ contract DefxBridge is
         lockersVotingLock.push(msg.sender);
 
         // check if the locker threshold is met
-        if (lockersVotingLock.length >= lockerThreshold && !paused()) {
+        if (lockersVotingLock.length >= lockerThreshold) {
             _pause();
             emit ContractPaused();
         }
@@ -210,7 +210,7 @@ contract DefxBridge is
 
         // check if the locker has voted to pause before since same lockers can only vote to unpause
         bool found = false;
-        for (uint64 i = 0; i < lockersVotingLock.length; i++) {
+        for (uint256 i = 0; i < lockersVotingLock.length; i++) {
             if (lockersVotingLock[i] == msg.sender) {
                 found = true;
                 break;
@@ -221,7 +221,7 @@ contract DefxBridge is
         }
 
         // remove the locker from the list
-        for (uint64 i = 0; i < lockersVotingLock.length; i++) {
+        for (uint256 i = 0; i < lockersVotingLock.length; i++) {
             if (lockersVotingLock[i] == msg.sender) {
                 lockersVotingLock[i] = lockersVotingLock[
                     lockersVotingLock.length - 1
@@ -231,8 +231,8 @@ contract DefxBridge is
             }
         }
 
-        // check if the locker threshold is no longer met
-        if (lockersVotingLock.length < lockerThreshold) {
+        // check if all lockers voted to unpause
+        if (lockersVotingLock.length == 0) {
             _unpause();
             emit ContractResumed();
         }
@@ -480,15 +480,28 @@ contract DefxBridge is
             );
             address spender = address(this);
 
-            transactionToken.permit(
-                deposits[i].user,
-                spender,
-                deposits[i].amount,
-                deposits[i].deadline,
-                deposits[i].signature.v,
-                bytes32(deposits[i].signature.r),
-                bytes32(deposits[i].signature.s)
-            );
+            try
+                transactionToken.permit(
+                    deposits[i].user,
+                    spender,
+                    deposits[i].amount,
+                    deposits[i].deadline,
+                    deposits[i].signature.v,
+                    bytes32(deposits[i].signature.r),
+                    bytes32(deposits[i].signature.s)
+                )
+            {} catch {
+                if (
+                    transactionToken.allowance(deposits[i].user, spender) <
+                    deposits[i].amount
+                ) {
+                    revert FailedPermitDeposit(
+                        deposits[i].user,
+                        deposits[i].amount,
+                        deposits[i].token
+                    );
+                }
+            }
 
             transactionToken.safeTransferFrom(
                 deposits[i].user,
@@ -568,7 +581,10 @@ contract DefxBridge is
             }
 
             // Check if the withdrawal has been requested
-            if (requestedWithdrawals[messageHash].requestedTime != 0) {
+            if (
+                requestedWithdrawals[messageHash]
+                    .requestedEpochTimestampInSeconds != 0
+            ) {
                 emit WithdrawalFailed(messageHash, 2);
                 return;
             }
@@ -581,7 +597,7 @@ contract DefxBridge is
                 token: withdrawals[i].token,
                 amount: withdrawals[i].amount,
                 nonce: withdrawals[i].nonce,
-                requestedTime: requestedTime,
+                requestedEpochTimestampInSeconds: requestedTime,
                 requestedBlockNumber: requestedBlockNumber,
                 message: messageHash
             });
@@ -596,6 +612,9 @@ contract DefxBridge is
         uint64 nonce,
         Signature[] calldata signatures
     ) external nonReentrant {
+        // validate the nonce
+        _verifyAndIncrementNonce("invalidateWithdrawals", nonce);
+
         // generate the message hash used to sign the request
         bytes32 messageHash = SignatureLibrary.generateUniqueMessageHash(
             keccak256(abi.encode("invalidateWithdrawals", messages, nonce)),
@@ -611,6 +630,23 @@ contract DefxBridge is
         );
 
         for (uint256 i = 0; i < messages.length; i++) {
+            if (
+                requestedWithdrawals[messages[i]]
+                    .requestedEpochTimestampInSeconds == 0
+            ) {
+                revert WithdrawalDoesNotExist(messages[i]);
+            }
+            if (
+                !Utils.isTransactionInDisputeWindow(
+                    requestedWithdrawals[messages[i]]
+                        .requestedEpochTimestampInSeconds,
+                    requestedWithdrawals[messages[i]].requestedBlockNumber,
+                    withdrawalDisputePeriodSeconds,
+                    blockDurationMillis
+                )
+            ) {
+                revert WithdrawalDisputePeriodElapsed(messages[i]);
+            }
             invalidatedWithdrawals[messages[i]] = true;
             emit InvalidatedWithdrawal(requestedWithdrawals[messages[i]]);
         }
@@ -632,7 +668,9 @@ contract DefxBridge is
         }
 
         // Check if withdrawal exists
-        if (requestedWithdrawals[message].requestedTime == 0) {
+        if (
+            requestedWithdrawals[message].requestedEpochTimestampInSeconds == 0
+        ) {
             emit WithdrawalFailed(message, 5);
             return;
         }
@@ -640,7 +678,7 @@ contract DefxBridge is
         // Check if the dispute period has passed
         if (
             Utils.isTransactionInDisputeWindow(
-                requestedWithdrawals[message].requestedTime,
+                requestedWithdrawals[message].requestedEpochTimestampInSeconds,
                 requestedWithdrawals[message].requestedBlockNumber,
                 withdrawalDisputePeriodSeconds,
                 blockDurationMillis
@@ -675,14 +713,17 @@ contract DefxBridge is
             validatorsColdWallets
         );
         // validate the request
-        ValidatorLibrary.validateValidatorUpdateRequest(newValidatorSet);
+        ValidatorLibrary.validateValidatorUpdateRequest(
+            newValidatorSet,
+            pendingValidatorSetUpdate
+        );
 
         // generate the message hash used to sign the request
         bytes32 messageHash = SignatureLibrary.generateUniqueMessageHash(
             keccak256(
                 abi.encode(
                     "proposeValidatorSet",
-                    newValidatorSet.epochTimestamp,
+                    newValidatorSet.epochTimestampInSeconds,
                     newValidatorSet.hotValidatorSet,
                     newValidatorSet.coldValidatorSet,
                     newValidatorSet.powers
@@ -701,8 +742,8 @@ contract DefxBridge is
 
         // add validator set to pending
         pendingValidatorSetUpdate = PendingValidatorSetUpdate({
-            epochTimestamp: newValidatorSet.epochTimestamp,
-            updateTime: uint64(block.timestamp),
+            epochTimestampInSeconds: newValidatorSet.epochTimestampInSeconds,
+            updateEpochTimestampInSeconds: uint64(block.timestamp),
             updateBlockNumber: Utils.getCurrentBlockNumber(),
             hotValidatorSet: newValidatorSet.hotValidatorSet,
             coldValidatorSet: newValidatorSet.coldValidatorSet,
@@ -710,19 +751,11 @@ contract DefxBridge is
         });
 
         emit RequestedValidatorSetUpdate(
-            pendingValidatorSetUpdate.epochTimestamp,
+            pendingValidatorSetUpdate.epochTimestampInSeconds,
             pendingValidatorSetUpdate.hotValidatorSet,
             pendingValidatorSetUpdate.coldValidatorSet,
             newValidatorSet.powers
         );
-    }
-
-    function getPendingValidatorSetUpdate()
-        external
-        view
-        returns (PendingValidatorSetUpdate memory)
-    {
-        return pendingValidatorSetUpdate;
     }
 
     function finalizeValidatorSetUpdate() external whenNotPaused {
@@ -734,14 +767,14 @@ contract DefxBridge is
         );
 
         // Check if the pending update is not already finalized
-        if (pendingValidatorSetUpdate.updateTime == 0) {
+        if (pendingValidatorSetUpdate.updateEpochTimestampInSeconds == 0) {
             revert ValidatorSetUpdateAlreadyFinalized();
         }
 
         // Check for dispute period
         if (
             Utils.isTransactionInDisputeWindow(
-                pendingValidatorSetUpdate.epochTimestamp,
+                pendingValidatorSetUpdate.epochTimestampInSeconds,
                 pendingValidatorSetUpdate.updateBlockNumber,
                 validatorSetDisputePeriodSeconds,
                 blockDurationMillis
@@ -762,6 +795,25 @@ contract DefxBridge is
         uint64 nonce,
         Signature[] calldata signatures
     ) external whenNotPaused {
+        // validate the nonce
+        _verifyAndIncrementNonce("cancelValidatorSetUpdate", nonce);
+
+        // Check if the pending update is not already finalized
+        if (pendingValidatorSetUpdate.updateEpochTimestampInSeconds == 0) {
+            revert ValidatorSetUpdateAlreadyFinalized();
+        }
+
+        if (
+            !Utils.isTransactionInDisputeWindow(
+                pendingValidatorSetUpdate.epochTimestampInSeconds,
+                pendingValidatorSetUpdate.updateBlockNumber,
+                validatorSetDisputePeriodSeconds,
+                blockDurationMillis
+            )
+        ) {
+            revert ValidatorUpdateDisputePeriodElapsed();
+        }
+
         // generate the message hash used to sign the request
         bytes32 messageHash = SignatureLibrary.generateUniqueMessageHash(
             keccak256(abi.encode("cancelValidatorSetUpdate", nonce)),
@@ -776,16 +828,11 @@ contract DefxBridge is
             validatorsColdWallets
         );
 
-        // Check if the pending update is not already finalized
-        if (pendingValidatorSetUpdate.updateTime == 0) {
-            revert ValidatorSetUpdateAlreadyFinalized();
-        }
-
         // cancel the validator set update
-        pendingValidatorSetUpdate.updateTime = 0;
+        pendingValidatorSetUpdate.updateEpochTimestampInSeconds = 0;
 
         emit CanceledValidatorSetUpdate(
-            pendingValidatorSetUpdate.epochTimestamp,
+            pendingValidatorSetUpdate.epochTimestampInSeconds,
             pendingValidatorSetUpdate.hotValidatorSet,
             pendingValidatorSetUpdate.coldValidatorSet,
             pendingValidatorSetUpdate.powers

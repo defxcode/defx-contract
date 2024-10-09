@@ -23,13 +23,13 @@ library Utils {
     }
 
     function isTransactionInDisputeWindow(
-        uint64 time,
+        uint64 timeInSeconds,
         uint64 blockNumber,
         uint64 disputePeriodSeconds,
         uint64 blockDurationMillis
     ) internal view returns (bool) {
-        bool enoughTimePassed = block.timestamp * 1000 >
-            time + disputePeriodSeconds * 1000;
+        bool enoughTimePassed = block.timestamp >
+            timeInSeconds + disputePeriodSeconds;
         if (!enoughTimePassed) {
             return true;
         }
