@@ -5,8 +5,8 @@ import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 import "../library/SignatureLibrary.sol";
 
-import {ValidatorUpdateRequest, Signature, ValidatorSet} from "../common/Structs.sol";
-import {HotColdValidatorSetLengthMismatch, PowersLengthMismatch, InvalidValidatorAddress, ValidatorPowerShouldBeGreaterThanZero, InsufficientValidatorPower, TimestampShouldBeGreaterThanZero, ValidatorSetLengthShouldBeGreaterThanZero, NotAValidator, RequestExpired} from "../common/Errors.sol";
+import {ValidatorUpdateRequest, Signature, ValidatorSet, PendingValidatorSetUpdate} from "../common/Structs.sol";
+import {HotColdValidatorSetLengthMismatch, PowersLengthMismatch, InvalidValidatorAddress, ValidatorPowerShouldBeGreaterThanZero, InsufficientValidatorPower, TimestampShouldBeGreaterThanZero, ValidatorSetLengthShouldBeGreaterThanZero, NotAValidator, RequestExpired, AlreadyPendingValidatorSetUpdate} from "../common/Errors.sol";
 
 library ValidatorLibrary {
     function validateAddressIsValidator(
@@ -28,8 +28,14 @@ library ValidatorLibrary {
     }
 
     function validateValidatorUpdateRequest(
-        ValidatorUpdateRequest calldata newValidatorSet
+        ValidatorUpdateRequest calldata newValidatorSet,
+        PendingValidatorSetUpdate storage pendingValidatorSetUpdate
     ) internal view {
+        // verify that there is no existing pending update
+        if (pendingValidatorSetUpdate.epochTimestampInSeconds != 0) {
+            revert AlreadyPendingValidatorSetUpdate();
+        }
+
         if (
             newValidatorSet.hotValidatorSet.length == 0 ||
             newValidatorSet.coldValidatorSet.length == 0
@@ -37,11 +43,13 @@ library ValidatorLibrary {
             revert ValidatorSetLengthShouldBeGreaterThanZero();
         }
 
-        if (newValidatorSet.epochTimestamp <= 0) {
+        if (newValidatorSet.epochTimestampInSeconds <= 0) {
             revert TimestampShouldBeGreaterThanZero();
         }
 
-        if (newValidatorSet.epochTimestamp < block.timestamp - 5 * 60) {
+        if (
+            newValidatorSet.epochTimestampInSeconds < block.timestamp - 5 * 60
+        ) {
             // not within the 5 min window
             revert RequestExpired();
         }
@@ -64,7 +72,7 @@ library ValidatorLibrary {
 
         uint256 noOfValidators = newValidatorSet.powers.length;
 
-        for (uint8 i = 0; i < noOfValidators; i++) {
+        for (uint256 i = 0; i < noOfValidators; i++) {
             if (
                 newValidatorSet.hotValidatorSet[i] == address(0) ||
                 newValidatorSet.coldValidatorSet[i] == address(0)
@@ -96,7 +104,7 @@ library ValidatorLibrary {
         }
 
         address[] memory signers = new address[](signatureCount);
-        for (uint64 i = 0; i < signatureCount; i++) {
+        for (uint256 i = 0; i < signatureCount; i++) {
             signers[i] = SignatureLibrary.recoverSigner(
                 messageHash,
                 signatures[i],
@@ -106,8 +114,8 @@ library ValidatorLibrary {
 
         bool[] memory validatorCounted = new bool[](validatorSetLength);
 
-        for (uint64 i = 0; i < signatureCount; i++) {
-            for (uint64 j = 0; j < validatorSetLength; j++) {
+        for (uint256 i = 0; i < signatureCount; i++) {
+            for (uint256 j = 0; j < validatorSetLength; j++) {
                 if (
                     !validatorCounted[j] &&
                     signers[i] == validatorsForVerification.validators[j]

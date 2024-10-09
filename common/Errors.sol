@@ -6,6 +6,7 @@ error MoreThanTenDeposits();
 error ZeroUserAddress();
 error DepositAmountShouldBeGreaterThanZero();
 error PermitDeadlineExpired();
+error FailedPermitDeposit(address user, uint64 amount, address token);
 
 error InvalidSignatureRecoveredZeroAddress();
 error NotAValidator();
@@ -19,14 +20,18 @@ error PowersLengthMismatch();
 error InvalidValidatorAddress();
 error ValidatorPowerShouldBeGreaterThanZero();
 error InsufficientValidatorPower();
+error AlreadyPendingValidatorSetUpdate();
 
 error ValidatorSetUpdateAlreadyFinalized();
+error ValidatorUpdateDisputePeriodElapsed();
 
 error DisputePeriodNotSatisfied();
 
 error MoreThanTenWithdrawals();
 error WithdrawalsEmpty();
 error WithdrawalAmountShouldBeGreaterThanZero();
+error WithdrawalDisputePeriodElapsed(bytes32 message);
+error WithdrawalDoesNotExist(bytes32 message);
 
 error NotALocker();
 error AlreadyVoted();

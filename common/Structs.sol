@@ -19,7 +19,7 @@ struct RequestWithdrawal {
 }
 
 struct ValidatorUpdateRequest {
-    uint64 epochTimestamp;
+    uint64 epochTimestampInSeconds;
     address[] hotValidatorSet;
     address[] coldValidatorSet;
     uint64[] powers;
@@ -43,8 +43,8 @@ struct ValidatorSet {
 }
 
 struct PendingValidatorSetUpdate {
-    uint64 epochTimestamp;
-    uint64 updateTime;
+    uint64 epochTimestampInSeconds;
+    uint64 updateEpochTimestampInSeconds;
     uint64 updateBlockNumber;
     address[] hotValidatorSet;
     address[] coldValidatorSet;
@@ -56,7 +56,7 @@ struct WithdrawalData {
     uint64 amount;
     address token;
     uint64 nonce;
-    uint64 requestedTime;
+    uint64 requestedEpochTimestampInSeconds;
     uint64 requestedBlockNumber;
     bytes32 message;
 }
