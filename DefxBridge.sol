@@ -49,6 +49,12 @@ contract DefxBridge is
     mapping(address => bool) public lockers;
     address[] public lockersVotingLock;
 
+    bool public isNativeTokenEnabled;
+
+    mapping(bytes32 => WithdrawalDataV2) public requestedWithdrawalsV2;
+
+    mapping(address => bool) public authorizedUpgrades;
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -75,6 +81,7 @@ contract DefxBridge is
         validatorSetDisputePeriodSeconds = _validatorSetDisputePeriodSeconds;
         blockDurationMillis = _blockDurationMillis;
         lockerThreshold = _lockerThreshold;
+        isNativeTokenEnabled = true; // enable native token by default
 
         // initialize the validators
         _updateValidatorSet(
@@ -84,9 +91,20 @@ contract DefxBridge is
         );
     }
 
-    function _authorizeUpgrade(
-        address newImplementation
-    ) internal override onlyOwner {}
+    function reinitializeV2() public reinitializer(3) {
+        isNativeTokenEnabled = true;
+        emit NativeTokenStateChanged(true);
+    }
+
+    function _authorizeUpgrade(address newImplementation) internal override {
+        // Remove onlyOwner and require multi-sig authorization instead
+        if (!authorizedUpgrades[newImplementation]) {
+            revert UpgradeNotAuthorized(newImplementation);
+        }
+
+        // Clear the authorization after use (single-use authorization)
+        authorizedUpgrades[newImplementation] = false;
+    }
 
     function _updateValidatorSet(
         address[] memory coldValidatorSet,
@@ -238,9 +256,34 @@ contract DefxBridge is
         }
     }
 
+    receive() external payable whenNotPaused {
+        if (!isNativeTokenEnabled) revert NativeTokenDisabled();
+    }
+
     /** End Pausing **/
 
     /** Config mutations **/
+    function toggleNativeToken(
+        bool _isEnabled,
+        uint64 nonce,
+        Signature[] calldata signatures
+    ) external {
+        _verifyAndIncrementNonce("toggleNativeToken", nonce);
+        bytes32 messageHash = SignatureLibrary.generateUniqueMessageHash(
+            keccak256(abi.encode("toggleNativeToken", _isEnabled, nonce)),
+            address(this)
+        );
+        ValidatorLibrary.verifyValidatorQuorom(
+            messageHash,
+            signatures,
+            cumulativeValidatorPower,
+            domainSeparator,
+            validatorsColdWallets
+        );
+        isNativeTokenEnabled = _isEnabled;
+        emit NativeTokenStateChanged(_isEnabled);
+    }
+
     function updateTokenContracts(
         address[] calldata tokenContractsUpdate,
         uint64 nonce,
@@ -256,6 +299,7 @@ contract DefxBridge is
             ),
             address(this)
         );
+
         // verify the validator quorum
         ValidatorLibrary.verifyValidatorQuorom(
             messageHash,
@@ -522,10 +566,11 @@ contract DefxBridge is
      * 4: Withdrawal has already been finalized
      * 5: Withdrawal does not exist
      * 6: Dispute period not satisfied
+     * 7: Failed to transfer the tokens
      */
 
     function batchRequestWithdrawals(
-        RequestWithdrawal[] calldata withdrawals
+        RequestWithdrawalV2[] calldata withdrawals
     ) external whenNotPaused nonReentrant {
         // validate the withdrawal request
         if (withdrawals.length == 0) {
@@ -545,10 +590,15 @@ contract DefxBridge is
             }
 
             if (
-                withdrawals[i].token == address(0) ||
+                withdrawals[i].token != address(0) &&
                 !enabledTokensMap[withdrawals[i].token]
             ) {
                 revert InvalidTokenContract();
+            }
+
+            // For native token, check if it's enabled
+            if (withdrawals[i].token == address(0) && !isNativeTokenEnabled) {
+                revert NativeTokenDisabled();
             }
 
             // generate the message hash used to sign the request
@@ -582,7 +632,7 @@ contract DefxBridge is
 
             // Check if the withdrawal has been requested
             if (
-                requestedWithdrawals[messageHash]
+                requestedWithdrawalsV2[messageHash]
                     .requestedEpochTimestampInSeconds != 0
             ) {
                 emit WithdrawalFailed(messageHash, 2);
@@ -592,7 +642,7 @@ contract DefxBridge is
             // request the withdrawal
             uint64 requestedTime = uint64(block.timestamp);
             uint64 requestedBlockNumber = Utils.getCurrentBlockNumber();
-            WithdrawalData memory withdrawalData = WithdrawalData({
+            WithdrawalDataV2 memory withdrawalData = WithdrawalDataV2({
                 user: withdrawals[i].user,
                 token: withdrawals[i].token,
                 amount: withdrawals[i].amount,
@@ -601,7 +651,7 @@ contract DefxBridge is
                 requestedBlockNumber: requestedBlockNumber,
                 message: messageHash
             });
-            requestedWithdrawals[messageHash] = withdrawalData;
+            requestedWithdrawalsV2[messageHash] = withdrawalData;
 
             emit RequestedWithdrawal(withdrawalData);
         }
@@ -631,16 +681,16 @@ contract DefxBridge is
 
         for (uint256 i = 0; i < messages.length; i++) {
             if (
-                requestedWithdrawals[messages[i]]
+                requestedWithdrawalsV2[messages[i]]
                     .requestedEpochTimestampInSeconds == 0
             ) {
                 revert WithdrawalDoesNotExist(messages[i]);
             }
             if (
                 !Utils.isTransactionInDisputeWindow(
-                    requestedWithdrawals[messages[i]]
+                    requestedWithdrawalsV2[messages[i]]
                         .requestedEpochTimestampInSeconds,
-                    requestedWithdrawals[messages[i]].requestedBlockNumber,
+                    requestedWithdrawalsV2[messages[i]].requestedBlockNumber,
                     withdrawalDisputePeriodSeconds,
                     blockDurationMillis
                 )
@@ -648,7 +698,7 @@ contract DefxBridge is
                 revert WithdrawalDisputePeriodElapsed(messages[i]);
             }
             invalidatedWithdrawals[messages[i]] = true;
-            emit InvalidatedWithdrawal(requestedWithdrawals[messages[i]]);
+            emit InvalidatedWithdrawal(requestedWithdrawalsV2[messages[i]]);
         }
     }
 
@@ -669,7 +719,8 @@ contract DefxBridge is
 
         // Check if withdrawal exists
         if (
-            requestedWithdrawals[message].requestedEpochTimestampInSeconds == 0
+            requestedWithdrawalsV2[message].requestedEpochTimestampInSeconds ==
+            0
         ) {
             emit WithdrawalFailed(message, 5);
             return;
@@ -678,8 +729,9 @@ contract DefxBridge is
         // Check if the dispute period has passed
         if (
             Utils.isTransactionInDisputeWindow(
-                requestedWithdrawals[message].requestedEpochTimestampInSeconds,
-                requestedWithdrawals[message].requestedBlockNumber,
+                requestedWithdrawalsV2[message]
+                    .requestedEpochTimestampInSeconds,
+                requestedWithdrawalsV2[message].requestedBlockNumber,
                 withdrawalDisputePeriodSeconds,
                 blockDurationMillis
             )
@@ -689,16 +741,31 @@ contract DefxBridge is
         }
 
         // Finalize the withdrawals
-        ERC20PermitUpgradeable transactionToken = ERC20PermitUpgradeable(
-            requestedWithdrawals[message].token
-        );
+        WithdrawalDataV2 memory withdrawal = requestedWithdrawalsV2[message];
 
-        transactionToken.safeTransfer(
-            requestedWithdrawals[message].user,
-            requestedWithdrawals[message].amount
-        );
+        // Handle native token withdrawal
+        if (withdrawal.token == address(0)) {
+            if (address(this).balance < withdrawal.amount) {
+                emit WithdrawalFailed(message, 7);
+                return;
+            }
+            (bool success, ) = withdrawal.user.call{value: withdrawal.amount}(
+                ""
+            );
+            if (!success) {
+                emit WithdrawalFailed(message, 7);
+                return;
+            }
+        } else {
+            // Handle ERC20 transfer
+            ERC20PermitUpgradeable(withdrawal.token).safeTransfer(
+                withdrawal.user,
+                withdrawal.amount
+            );
+        }
+
         finalizedWithdrawals[message] = true;
-        emit FinalizedWithdrawal(requestedWithdrawals[message]);
+        emit FinalizedWithdrawal(requestedWithdrawalsV2[message]);
     }
 
     /** End Withdrawal **/
@@ -838,5 +905,88 @@ contract DefxBridge is
             pendingValidatorSetUpdate.powers
         );
     }
-    /** End Validator Calls **/
+
+    /**
+     * @dev Contract Upgrade Security System - Two-Phase Distributed Upgrade Process
+     *
+     * This system implements a secure upgrade mechanism that requires cold validator consensus
+     * before any contract upgrade can be executed.
+     *
+     * SECURITY ARCHITECTURE:
+     * ═══════════════════════
+     * Phase 1: Authorization (authorizeUpgradeWithMultiSig)
+     * - Cold validators must provide signatures to authorize a specific implementation address
+     * - Uses the same quorum mechanism as critical operations like updateTokenContracts
+     * - Stores authorization in authorizedUpgrades mapping for later verification
+     *
+     * Phase 2: Execution (_authorizeUpgrade)
+     * - OpenZeppelin's upgrade system calls _authorizeUpgrade during proxy upgrade
+     * - Function checks if the implementation was pre-authorized by validators
+     * - Clears authorization after use (single-use security pattern)
+     *
+     * WHY THE MAPPING IS ESSENTIAL:
+     * ════════════════════════════
+     * OpenZeppelin's _authorizeUpgrade() is called internally during upgrades but:
+     * - Has no access to validator signatures
+     * - Cannot perform real-time signature verification
+     * - Must rely on pre-stored authorization state
+     *
+     * Without this mapping, we would have to choose between:
+     * ❌ Always allow upgrades (security vulnerability)
+     * ❌ Always block upgrades (system becomes non-upgradeable)
+     *
+     * SECURITY BENEFITS:
+     * ═════════════════
+     * ✅ Multi-signature authorization required from cold validators
+     * ✅ Same security level as token contract updates
+     * ✅ Single-use authorization prevents replay attacks
+     * ✅ Compatible with OpenZeppelin's UUPS upgrade pattern
+     * ✅ Separates authorization from execution for better security
+     *
+     * WORKFLOW:
+     * ════════
+     * 1. Deploy new implementation contract
+     * 2. Validators sign authorization message for specific implementation
+     * 3. Call authorizeUpgradeWithMultiSig() with collected signatures
+     * 4. Execute upgrade using OpenZeppelin's upgradeProxy()
+     * 5. _authorizeUpgrade() verifies pre-authorization and clears it
+     *
+     * @param newImplementation Address of the new implementation contract to authorize
+     * @param nonce Unique nonce to prevent replay attacks
+     * @param signatures Array of validator signatures approving this upgrade
+     */
+    function authorizeUpgradeWithMultiSig(
+        address newImplementation,
+        uint64 nonce,
+        Signature[] calldata signatures
+    ) external {
+        // Validate the nonce
+        _verifyAndIncrementNonce("authorizeUpgradeWithMultiSig", nonce);
+
+        // Generate the message hash used to sign the request
+        bytes32 messageHash = SignatureLibrary.generateUniqueMessageHash(
+            keccak256(
+                abi.encode(
+                    "authorizeUpgradeWithMultiSig",
+                    newImplementation,
+                    nonce
+                )
+            ),
+            address(this)
+        );
+
+        // Verify the validator quorum (same as updateTokenContracts)
+        ValidatorLibrary.verifyValidatorQuorom(
+            messageHash,
+            signatures,
+            cumulativeValidatorPower,
+            domainSeparator,
+            validatorsColdWallets // Using cold validators for upgrade authorization
+        );
+
+        // Store the authorized upgrade
+        authorizedUpgrades[newImplementation] = true;
+
+        emit UpgradeAuthorized(newImplementation, nonce);
+    }
 }

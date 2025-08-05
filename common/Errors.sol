@@ -6,7 +6,7 @@ error MoreThanTenDeposits();
 error ZeroUserAddress();
 error DepositAmountShouldBeGreaterThanZero();
 error PermitDeadlineExpired();
-error FailedPermitDeposit(address user, uint64 amount, address token);
+error FailedPermitDeposit(address user, uint256 amount, address token);
 
 error InvalidSignatureRecoveredZeroAddress();
 error NotAValidator();
@@ -44,3 +44,6 @@ error InvalidNonce();
 
 error NotEnoughTokensToUpdate();
 error InvalidTokenContract();
+error NativeTokenDisabled();
+
+error UpgradeNotAuthorized(address implementation);

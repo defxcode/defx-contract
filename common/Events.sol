@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {WithdrawalData} from "./Structs.sol";
+import {WithdrawalData, WithdrawalDataV2} from "./Structs.sol";
 
 event RequestedValidatorSetUpdate(
     uint64 timestamp,
@@ -46,11 +46,11 @@ event ChangedLockerThreshold(
 
 event WithdrawalFailed(bytes32 message, uint256 reason);
 
-event RequestedWithdrawal(WithdrawalData withdrawalData);
+event RequestedWithdrawal(WithdrawalDataV2 withdrawalData);
 
-event InvalidatedWithdrawal(WithdrawalData withdrawalData);
+event InvalidatedWithdrawal(WithdrawalDataV2 withdrawalData);
 
-event FinalizedWithdrawal(WithdrawalData withdrawalData);
+event FinalizedWithdrawal(WithdrawalDataV2 withdrawalData);
 
 event ContractPaused();
 
@@ -59,3 +59,7 @@ event ContractResumed();
 event ModifiedLocker(address locker, bool isEnabled);
 
 event ChangedTokenContract(address[] newTokenContracts);
+
+event NativeTokenStateChanged(bool isEnabled);
+
+event UpgradeAuthorized(address indexed newImplementation, uint64 nonce);
