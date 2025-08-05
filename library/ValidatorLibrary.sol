@@ -4,7 +4,6 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 import "../library/SignatureLibrary.sol";
-
 import {ValidatorUpdateRequest, Signature, ValidatorSet, PendingValidatorSetUpdate} from "../common/Structs.sol";
 import {HotColdValidatorSetLengthMismatch, PowersLengthMismatch, InvalidValidatorAddress, ValidatorPowerShouldBeGreaterThanZero, InsufficientValidatorPower, TimestampShouldBeGreaterThanZero, ValidatorSetLengthShouldBeGreaterThanZero, NotAValidator, RequestExpired, AlreadyPendingValidatorSetUpdate} from "../common/Errors.sol";
 
@@ -98,12 +97,12 @@ library ValidatorLibrary {
         uint64 validatorSetLength = uint64(
             validatorsForVerification.validators.length
         );
-
         if (signatureCount == 0) {
             revert InsufficientValidatorPower();
         }
 
         address[] memory signers = new address[](signatureCount);
+
         for (uint256 i = 0; i < signatureCount; i++) {
             signers[i] = SignatureLibrary.recoverSigner(
                 messageHash,
@@ -113,7 +112,6 @@ library ValidatorLibrary {
         }
 
         bool[] memory validatorCounted = new bool[](validatorSetLength);
-
         for (uint256 i = 0; i < signatureCount; i++) {
             for (uint256 j = 0; j < validatorSetLength; j++) {
                 if (
@@ -144,6 +142,6 @@ library ValidatorLibrary {
         uint64 cumulativeValidatorPower,
         uint64 accumulatedPower
     ) internal pure returns (bool) {
-        return 3 * accumulatedPower > 2 * cumulativeValidatorPower;
+        return 3 * accumulatedPower >= 2 * cumulativeValidatorPower;
     }
 }

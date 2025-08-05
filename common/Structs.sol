@@ -18,6 +18,14 @@ struct RequestWithdrawal {
     Signature[] signatures;
 }
 
+struct RequestWithdrawalV2 {
+    address user;
+    uint256 amount;
+    address token;
+    uint64 nonce;
+    Signature[] signatures;
+}
+
 struct ValidatorUpdateRequest {
     uint64 epochTimestampInSeconds;
     address[] hotValidatorSet;
@@ -54,6 +62,16 @@ struct PendingValidatorSetUpdate {
 struct WithdrawalData {
     address user;
     uint64 amount;
+    address token;
+    uint64 nonce;
+    uint64 requestedEpochTimestampInSeconds;
+    uint64 requestedBlockNumber;
+    bytes32 message;
+}
+
+struct WithdrawalDataV2 {
+    address user;
+    uint256 amount;
     address token;
     uint64 nonce;
     uint64 requestedEpochTimestampInSeconds;
