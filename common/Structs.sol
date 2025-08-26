@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 /** Request Structs */
 struct DepositWithPermit {
     address user;
-    uint64 amount;
+    uint256 amount;
     uint64 deadline;
     address token;
     Signature signature;
