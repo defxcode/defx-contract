@@ -630,12 +630,27 @@ contract DefxBridge is
                 return;
             }
 
-            // Check if the withdrawal has been requested
+            // Check if the withdrawal has been requested in the old mapping
+            if (
+                requestedWithdrawals[messageHash]
+                    .requestedEpochTimestampInSeconds != 0
+            ) {
+                emit WithdrawalFailed(messageHash, 2);
+                return;
+            }
+
+            // Check if the withdrawal has been requested in the new mapping
             if (
                 requestedWithdrawalsV2[messageHash]
                     .requestedEpochTimestampInSeconds != 0
             ) {
                 emit WithdrawalFailed(messageHash, 2);
+                return;
+            }
+
+            // Check if the withdrawal has already been finalized
+            if (finalizedWithdrawals[messageHash]) {
+                emit WithdrawalFailed(messageHash, 4);
                 return;
             }
 
@@ -743,9 +758,14 @@ contract DefxBridge is
         // Finalize the withdrawals
         WithdrawalDataV2 memory withdrawal = requestedWithdrawalsV2[message];
 
+        // Update state before external calls (CEI pattern)
+        finalizedWithdrawals[message] = true;
+
         // Handle native token withdrawal
         if (withdrawal.token == address(0)) {
             if (address(this).balance < withdrawal.amount) {
+                // Revert state change on failure
+                finalizedWithdrawals[message] = false;
                 emit WithdrawalFailed(message, 7);
                 return;
             }
@@ -753,6 +773,8 @@ contract DefxBridge is
                 ""
             );
             if (!success) {
+                // Revert state change on failure
+                finalizedWithdrawals[message] = false;
                 emit WithdrawalFailed(message, 7);
                 return;
             }
@@ -764,7 +786,6 @@ contract DefxBridge is
             );
         }
 
-        finalizedWithdrawals[message] = true;
         emit FinalizedWithdrawal(requestedWithdrawalsV2[message]);
     }
 

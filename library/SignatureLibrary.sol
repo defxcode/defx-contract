@@ -23,7 +23,7 @@ library SignatureLibrary {
                 abi.encode(
                     EIP712_DOMAIN_SEPARATOR,
                     keccak256(bytes("DefxBridge")),
-                    keccak256(bytes("1")),
+                    keccak256(bytes("2")),
                     block.chainid,
                     address(this)
                 )
